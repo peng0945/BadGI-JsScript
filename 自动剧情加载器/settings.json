@@ -1,5 +1,16 @@
 [
   {
+    "name": "process_selector",
+    "type": "select",
+    "label": "可执行剧情列表",
+    "options": [
+      "刷新剧情列表",
+      "持续运行"
+    ],
+    "default": "刷新剧情列表",
+    "process_paths": {}
+  },
+  {
     "name": "team",
     "type": "input-text",
     "label": "战斗的队伍名称，不填表示不切换队伍"
@@ -13,6 +24,11 @@
     "name": "pause",
     "type": "input-text",
     "label": "暂停键字符（例如F10就直接填F10）"
+  },
+  {
+    "name": "pauseBeforeKey",
+    "type": "input-text",
+    "label": "暂停前按键操作(实验性功能)"
   },
   {
     "name": "noSkip",

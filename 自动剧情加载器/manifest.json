@@ -12,6 +12,10 @@
   ],
   "settings_ui": "settings.json",
   "main": "main.js",
+  "library": [
+    ".",
+    "utils"
+  ],
    "saved_files": [
     "resuming/*.json"
   ],
