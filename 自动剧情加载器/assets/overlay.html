@@ -1,0 +1,1360 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>自动剧情加载器 · 运行面板</title>
+<style>
+/* 运行面板样式：派蒙主题（白色主体 + 镶金边 + 星空点缀），选择页沿用白色简约风 */
+:root{
+  /* 选择页设计令牌（与 process-picker.html 一致） */
+  --app-bg:        #f4f6fa;
+  --panel-bg:      #ffffff;
+  --panel-border:  #e5eaf2;
+  --panel-shadow:  0 8px 24px rgb(31 35 41 / 6%);
+  --text-primary:  #1d2129;
+  --text-secondary:#86909c;
+  --brand:         #1677ff;
+  --brand-soft:    #e8f3ff;
+  --danger-soft:   #fff1f0;
+  --radius-lg: 10px;
+  --radius-md: 7px;
+
+  /* 派蒙主题色 */
+  --pm-gold:       #c8a44d;   /* 镶金边 */
+  --pm-gold-soft:  #f3e6c4;
+  --pm-gold-line:  #e3cf9a;
+  --pm-starry:     #1e2a4a;   /* 星空披风的深蓝 */
+  --pm-starry-2:   #2f4472;
+  --pm-eye:        #4a9eff;   /* 蓝瞳 */
+
+  /* 语义色 */
+  --px-y:      var(--pm-gold);
+  --px-y-dark: var(--pm-gold-line);
+  --px-y-dim:  var(--pm-gold-soft);
+  --px-bg:     var(--panel-bg);
+  --px-fg:     var(--text-primary);
+  --px-gray:   #4e5969;
+  --px-dim:    var(--text-secondary);
+  --px-ok:     #12b76a;
+  --px-warn:   #f79009;
+  --px-err:    #f04438;
+
+  /* 最小化时向左平移的距离（由 JS 按分辨率写入） */
+  --mini-shift: 375px;
+  /* 过渡缓动 */
+  --px-ease: cubic-bezier(.45,.05,.55,.95);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{
+  width:100%;height:100%;overflow:hidden;background:transparent;
+  font-family:Inter,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;
+  color:var(--px-fg);
+  user-select:none;
+}
+.overlay{width:100vw;height:100vh;position:relative}
+
+
+.panel{
+  position:absolute;right:12px;bottom:12px;width:400px;
+  background:var(--panel-bg);
+  /* 白色主体 + 镶金边 */
+  border:1.5px solid var(--pm-gold);
+  border-radius:var(--radius-lg);
+  box-shadow:var(--panel-shadow), 0 0 0 1px var(--pm-gold-soft) inset;
+  transition:width .45s var(--px-ease), transform .45s var(--px-ease);
+  transform:translateX(0);
+  overflow:hidden;
+}
+/* 入场：从右下滑入 */
+.panel.enter{animation:panel-enter .6s var(--px-ease) both}
+@keyframes panel-enter{
+  0%{opacity:0;transform:translate(60px,40px)}
+  100%{opacity:1;transform:translate(0,0)}
+}
+.panel-inner{padding:10px 12px;
+  transition:padding .45s var(--px-ease)}
+
+/* 四角星星 */
+.corner{
+  position:absolute;width:6px;height:6px;z-index:3;pointer-events:none;
+  color:var(--pm-gold);font-size:6px;line-height:1;
+}
+.c-tl{top:2px;left:3px} .c-tr{top:2px;right:3px}
+.c-bl{bottom:2px;left:3px} .c-br{bottom:2px;right:3px}
+
+/* 标题栏：深蓝星空渐变 + 金色文字 */
+.titlebar{
+  display:flex;align-items:center;gap:6px;
+  margin:-10px -12px 8px;padding:8px 12px;
+  background:linear-gradient(135deg,var(--pm-starry) 0%,var(--pm-starry-2) 100%);
+  border-bottom:1px solid var(--pm-gold);
+  position:relative;
+}
+/* 星空细碎亮点 */
+.titlebar::after{
+  content:'';position:absolute;inset:0;pointer-events:none;
+  background-image:
+    radial-gradient(1px 1px at 12% 30%, rgba(255,255,255,.75), transparent),
+    radial-gradient(1px 1px at 34% 68%, rgba(255,255,255,.55), transparent),
+    radial-gradient(1px 1px at 58% 22%, rgba(255,255,255,.7), transparent),
+    radial-gradient(1px 1px at 76% 74%, rgba(255,255,255,.5), transparent),
+    radial-gradient(1px 1px at 91% 40%, rgba(255,255,255,.65), transparent);
+  opacity:.85;
+}
+.diamond{color:var(--pm-gold);font-size:12px;line-height:1}
+.title{color:#fff;font-size:13px;font-weight:600;letter-spacing:.2px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  position:relative;z-index:1}
+.spacer{flex:1}
+.tb-btn{
+  background:rgba(255,255,255,.12);border:0;color:var(--pm-gold-soft);
+  font-family:inherit;font-size:12px;font-weight:500;line-height:1;
+  padding:4px 8px;border-radius:var(--radius-md);cursor:pointer;
+  transition:background .12s,color .12s;position:relative;z-index:1;
+}
+.tb-btn:hover{background:rgba(255,255,255,.24);color:#fff}
+.tb-btn:active{transform:scale(.94)}
+/* 放弃剧情按钮 */
+.tb-btn.danger{background:rgba(240,68,56,.22);color:#ffc9c5}
+.tb-btn.danger:hover{background:rgba(240,68,56,.4);color:#fff}
+/* 空闲态置灰 */
+.tb-btn.off,.tb-btn:disabled{opacity:.4;cursor:not-allowed;background:transparent;color:#9fb0cc}
+.tb-btn.off:hover,.tb-btn:disabled:hover{background:transparent;color:#9fb0cc}
+
+/* 分隔线 */
+.divider{height:1px;margin:8px 0;background:linear-gradient(
+  to right, transparent, var(--pm-gold-line), transparent)}
+
+/* 信息行 */
+.row{display:flex;align-items:baseline;gap:10px;line-height:1.55;margin-bottom:4px}
+.row .k{color:var(--px-dim);font-size:12px;flex:0 0 52px}
+.row .v{color:var(--px-fg);font-size:13px;flex:1;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .v.time{color:var(--pm-gold);font-weight:700;font-size:24px;
+  font-variant-numeric:tabular-nums;letter-spacing:.5px}
+
+/* 状态徽标 */
+.st{display:inline-block;padding:2px 8px;font-size:12px;font-weight:600;
+  border:1px solid currentColor;border-radius:999px;line-height:1.35}
+.st-run{color:var(--px-ok)}
+.st-pause{color:var(--px-warn)}
+.st-bgi{color:var(--px-y)}
+.st-idle{color:var(--px-gray)}
+.st-done{color:var(--px-ok)}
+/* 持续运行空闲态 / 放弃中 */
+.st-wait{color:var(--px-y)}
+.st-warn{color:var(--px-err)}
+
+/* 状态点：运行中时柔和闪烁 */
+.st .dot{display:inline-block;width:7px;height:7px;margin-right:6px;
+  border-radius:50%;background:currentColor;vertical-align:baseline}
+.st-run .dot{animation:dot-blink 1.2s ease-in-out infinite}
+@keyframes dot-blink{0%,100%{opacity:1}50%{opacity:.3}}
+/* 空闲态呼吸更慢 */
+.st-wait .dot{animation:dot-blink 2s ease-in-out infinite}
+
+/* 当前执行行 */
+.lbl{color:var(--px-dim);font-size:12px;margin-bottom:4px}
+.curline{
+  background:var(--app-bg);border-left:3px solid var(--pm-gold);
+  border-radius:0 var(--radius-md) var(--radius-md) 0;
+  padding:7px 10px;font-size:13px;line-height:1.5;color:var(--px-fg);
+  word-break:break-all;min-height:34px;
+}
+.curline .ln{color:var(--px-dim);font-size:11px;margin-right:6px}
+.curline.empty{color:var(--px-dim)}
+
+
+.loop{
+  display:none;align-items:center;gap:7px;margin-top:5px;
+  font-size:12px;color:var(--px-warn);
+}
+.loop.show{display:flex}
+.loop .lt{color:var(--px-dim)}
+.loop .lv{font-variant-numeric:tabular-nums;font-weight:700;color:var(--px-warn)}
+.loop .lbar{display:flex;gap:2px}
+.loop .lbar i{width:7px;height:6px;border-radius:2px;background:var(--panel-border);display:block}
+.loop .lbar i.on{background:var(--px-warn)}
+.loop.max{color:var(--px-err)}
+.loop.max .lv{color:var(--px-err)}
+.loop.max .lbar i.on{background:var(--px-err)}
+
+/* 底部提示 */
+.hint{
+  margin-top:8px;padding-top:7px;border-top:1px solid var(--pm-gold-soft);
+  color:var(--px-dim);font-size:12px;
+  animation:hint-breathe 2s ease-in-out infinite;
+}
+.hint .on{color:var(--pm-gold);font-weight:600}
+@keyframes hint-breathe{0%,100%{opacity:.45}50%{opacity:1}}
+
+/* ---------------- 派蒙画像（右下角） ----------------
+   像素风，两帧交替实现眨眼。 */
+.paimon{
+  position:absolute;right:-4px;bottom:-6px;width:60px;height:60px;
+  pointer-events:none;z-index:2;
+  animation:pm-float 3.2s ease-in-out infinite;
+  filter:drop-shadow(0 2px 4px rgba(30,42,74,.22));
+}
+.paimon .pm-frame{
+  position:absolute;inset:0;width:100%;height:100%;
+  image-rendering:pixelated;display:block;
+}
+.paimon .pm-blink{opacity:0}
+
+@keyframes pm-float{
+  0%,100%{transform:translateY(0)}
+  50%{transform:translateY(-3px)}
+}
+
+/* 最小化时缩小派蒙，避免挡住小条内容 */
+.panel.min .paimon{width:38px;height:38px;right:-3px;bottom:-5px}
+
+/* 尊重系统「减少动态效果」偏好 */
+@media (prefers-reduced-motion: reduce){
+  .paimon{animation:none}
+}
+
+
+/* 位移量 --mini-shift 由 JS 按分辨率写入，此处需写具体宽度才能做渐变动画 */
+.panel.min{
+  width:250px;
+  transform:translateX(calc(-1 * var(--mini-shift)));
+}
+.panel.min .panel-inner{padding:8px 11px}
+.panel.min .titlebar{margin-bottom:0}
+/* 最小化时压缩标题栏，并隐藏设置按钮 */
+.panel.min .title{font-size:12px;letter-spacing:0}
+.panel.min #btnSettings{display:none}
+.mini{display:none;align-items:center;gap:10px;margin-top:7px}
+.panel.min .mini{display:flex}
+.panel.min .body{display:none}
+/* 最小化内容淡入：延迟到宽度动画过半再出现 */
+.panel.min .mini{animation:mini-in .28s var(--px-ease) .26s both}
+@keyframes mini-in{0%{opacity:0}100%{opacity:1}}
+/* 展开时大内容延迟淡入 */
+.panel:not(.min) .body{animation:body-in .28s var(--px-ease) .24s both}
+@keyframes body-in{0%{opacity:0}100%{opacity:1}}
+.mini .mtime{color:var(--pm-gold);font-size:20px;font-weight:700;
+  font-variant-numeric:tabular-nums;letter-spacing:.5px}
+.mini .mst{font-size:12px}
+/* 最小化时的循环进度 */
+.mini .mloop{display:none;font-size:12px;color:var(--px-warn);
+  font-variant-numeric:tabular-nums;font-weight:700}
+.mini .mloop.show{display:inline}
+.mini .mloop.max{color:var(--px-err)}
+
+/* 居中弹窗：遮罩底与卡片规格对齐 process-picker.html */
+.mask{
+  position:fixed;inset:0;display:none;align-items:center;justify-content:center;
+  background:rgba(15,20,30,.62);
+}
+.mask.show{display:flex}
+.modal{
+  width:720px;max-width:86vw;max-height:82vh;display:flex;flex-direction:column;
+  background:var(--panel-bg);border-radius:var(--radius-lg);
+  box-shadow:var(--panel-shadow);overflow:hidden;
+}
+.modal-inner{padding:16px 20px 0;display:flex;flex-direction:column;min-height:0}
+.modal-title{color:var(--text-primary);font-size:15px;font-weight:600;
+  letter-spacing:.2px;margin-bottom:6px}
+.modal-sub{color:var(--px-dim);font-size:12px;margin-bottom:12px;line-height:1.7}
+.modal-sub b{color:var(--px-gray)}
+
+/* 剧情列表（picker 版式）：三列网格 + 分段筛选 + 搜索 + 面包屑 */
+.plist{flex:1;min-height:0;overflow-y:auto;padding:0 20px 12px;
+  scrollbar-width:thin;scrollbar-gutter:stable;overscroll-behavior:contain}
+
+/* 列表表头（吸顶） */
+.list-head{
+  display:grid;grid-template-columns:36px minmax(180px,1fr) 96px 44px;
+  align-items:center;gap:6px;position:sticky;top:0;z-index:2;
+  margin:0 -20px;padding:7px 28px;background:#edf2f8;
+  box-shadow:0 1px 0 #dde5ef;font-size:12px;color:#687b91;
+}
+.pitem{
+  display:grid;grid-template-columns:36px minmax(180px,1fr) 96px 44px;
+  align-items:center;gap:6px;min-height:39px;padding:0 8px;
+  border:0;border-radius:5px;background:transparent;color:#354a61;
+  font-size:13px;font-family:inherit;text-align:left;cursor:pointer;
+  transition:background 120ms ease,color 120ms ease,transform 120ms ease;
+  box-sizing:border-box;width:100%;
+}
+.pitem:hover{background:#eaf2fb}
+.pitem:active{transform:scale(.99)}
+.pitem.sel{color:#163f6c;background:#d9eaff}
+.pitem.sel:hover{background:#cfe4ff}
+/* 「当前剧情」高亮：浅蓝底 + 左侧强调条 */
+.pitem.cur{
+  background:#eef5ff;
+  box-shadow:inset 3px 0 0 var(--brand);
+  color:#1264d8;
+}
+.pitem.cur .nm{font-weight:600}
+.pitem.cur .kind{color:var(--brand)}
+.pitem.cur:hover{background:#e2eeff}
+/* 当前剧情且已选中：更深的选中色 */
+.pitem.cur.sel{
+  background:#d9eaff;
+  box-shadow:inset 3px 0 0 #0f5fd8;
+}
+/* 类型图标列（内联 SVG） */
+.pitem .kind{display:flex;align-items:center;justify-content:center;color:#8b9cae}
+.pitem .kind svg{width:16px;height:16px;display:block}
+.pitem.sel .kind{color:#1264d8}
+.pitem .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 状态列 */
+.pitem .tag{font-size:11px;color:#8998a9;text-align:right;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pitem.sel .tag{color:#163f6c}
+/* 操作列：只放 ▶，固定窄列 */
+.pitem .op{display:flex;align-items:center;justify-content:flex-end}
+/* 「从指定行开始」按钮 */
+.pitem .go{
+  background:var(--app-bg);border:0;border-radius:5px;
+  color:#354a61;font-family:inherit;font-size:11px;line-height:1;
+  padding:4px 8px;cursor:pointer;white-space:nowrap;
+  transition:background 120ms,color 120ms;
+}
+.pitem .go:hover{background:#eaf3ff;color:var(--brand)}
+
+
+.llist{flex:1;min-height:0;max-height:52vh;overflow-y:auto;
+  padding:0 20px 8px;scrollbar-width:thin;overscroll-behavior:contain}
+.lrow{
+  display:flex;align-items:baseline;gap:8px;padding:5px 8px;cursor:pointer;
+  border-radius:5px;font-size:12px;color:#354a61;line-height:1.5;
+  transition:background 120ms ease,color 120ms ease;
+}
+.lrow:hover{background:#eaf2fb}
+.lrow.sel{background:#d9eaff;color:#163f6c}
+.lrow .lno{flex:0 0 52px;color:var(--px-dim);font-variant-numeric:tabular-nums;
+  font-size:11px;text-align:right}
+.lrow.sel .lno{color:#1264d8}
+.lrow .ltx{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+.lrow .tag{flex:0 0 auto;font-size:10px;padding:1px 5px;border:1px solid currentColor;
+  border-radius:4px;opacity:.75}
+
+/* 行的类别（注释/元数据/块头 不可选） */
+/* 注释：浅灰斜体，不可选 */
+.lrow.cmt{color:var(--px-dim);font-style:italic;cursor:default}
+.lrow.cmt .ltx{color:var(--px-dim)}
+.lrow.meta{color:var(--px-dim);cursor:default}
+/* 块头：绿色加粗 */
+.lrow.head{color:var(--px-ok);cursor:default}
+.lrow.head .ltx{font-weight:700}
+.lrow.unk{color:var(--px-warn);cursor:default}
+/* 不可选的行不显示悬停高亮 */
+.lrow.cmt:hover,.lrow.meta:hover,.lrow.head:hover,.lrow.unk:hover{
+  background:transparent;color:inherit}
+.lrow.cmt:hover{color:var(--px-dim)}
+.lrow.head:hover{color:var(--px-ok)}
+
+/* 指令按类别上色 */
+.lrow.c-nav   .ltx{color:#1677ff}   /* 导航/移动/点击 */
+.lrow.c-talk  .ltx{color:#8a5a00}   /* 对话/提示 */
+.lrow.c-fight .ltx{color:#722ed1}   /* 战斗/队伍/角色 */
+.lrow.c-flow  .ltx{color:#d46b08}   /* 等待/暂停/切换/调时间 */
+.lrow.c-ext   .ltx{color:#0f9d58}   /* 注入/尝试/键鼠脚本 */
+.lrow.c-done  .ltx{color:#0f9d58;font-weight:700}  /* 任务完成 */
+.lrow.sel .ltx{color:#163f6c}
+
+.lempty{padding:24px 10px;color:var(--px-dim);font-size:13px;text-align:center}
+/* 列表顶部的图例 */
+.llegend{display:flex;flex-wrap:wrap;gap:9px;padding:6px 8px;margin-bottom:4px;
+  border-bottom:1px solid var(--panel-border);font-size:11px}
+.llegend i{font-style:normal}
+.llegend .lg-nav{color:#1677ff}
+.llegend .lg-talk{color:#8a5a00}
+.llegend .lg-fight{color:#722ed1}
+.llegend .lg-flow{color:#d46b08}
+.llegend .lg-ext{color:#0f9d58}
+.llegend .lg-cmt{color:var(--px-dim)}
+
+/* 弹窗底部按钮区 */
+.mfoot{display:flex;align-items:center;justify-content:flex-end;gap:9px;
+  margin:0 -20px;padding:11px 20px;border-top:1px solid var(--panel-border);
+  background:#fbfcfe}
+.btn{
+  font-family:inherit;font-size:13px;font-weight:500;min-height:34px;
+  padding:0 16px;border:0;border-radius:var(--radius-md);cursor:pointer;
+  background:var(--app-bg);color:#354a61;
+  transition:background 120ms,color 120ms,transform 120ms;
+}
+.btn:hover{background:#eaf3ff;color:var(--brand)}
+.btn:active{transform:scale(.96)}
+.btn.primary{background:var(--brand);color:#fff}
+.btn.primary:hover{background:#0f5fd8;color:#fff}
+.btn:disabled{background:#dfe6ef;color:#9aa7b5;cursor:not-allowed;transform:none}
+
+/* 工具栏（分段筛选 + 搜索 + 面包屑） */
+.crumbs{display:flex;align-items:center;gap:6px;padding:0 20px 12px;
+  font-size:12px;color:#687b91}
+.crumbs .sep{color:#b7c3d2}
+.crumbs .here{color:var(--text-primary);font-weight:500}
+.toolbar{display:flex;gap:8px;padding:0 20px 12px;align-items:center}
+.search{
+  flex:1;min-height:30px;padding:0 10px;border:1px solid var(--panel-border);
+  border-radius:var(--radius-md);background:var(--app-bg);font-size:13px;
+  font-family:inherit;color:var(--text-primary);outline:none;
+  transition:border-color 120ms ease,background 120ms ease;
+}
+.search:focus{border-color:var(--brand);background:#fff}
+.search::placeholder{color:#9aa7b5}
+.seg{display:inline-flex;gap:2px;padding:4px;background:var(--app-bg);
+  border-radius:var(--radius-md)}
+.seg button{
+  min-height:22px;padding:0 12px;border:0;border-radius:5px;background:transparent;
+  color:#354a61;font-size:13px;font-weight:650;line-height:1;cursor:pointer;
+  font-family:inherit;white-space:nowrap;
+  transition:background-color 140ms ease,color 140ms ease;
+}
+.seg button:hover{background:#eaf3ff;color:#1677ff}
+.seg button.active{background:#dceeff;color:#1264d8}
+
+/* 滚动条 */
+::-webkit-scrollbar{width:9px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#c9d4e2;border-radius:5px}
+::-webkit-scrollbar-thumb:hover{background:#a9b8ca}
+</style>
+</head>
+<body>
+<div class="overlay">
+
+  <!-- 右下角运行面板 -->
+  <div class="panel" id="panel">
+    <span class="corner c-tl">✦</span><span class="corner c-tr">✦</span>
+    <span class="corner c-bl">✦</span><span class="corner c-br">✦</span>
+    <div class="panel-inner">
+      <div class="titlebar">
+        <span class="diamond">✦</span>
+        <span class="title">自动剧情加载器</span>
+        <span class="spacer"></span>
+        <button class="tb-btn" id="btnAbandon" title="放弃当前剧情">⏏</button>
+        <button class="tb-btn" id="btnSettings" title="设置（需先按 K 进入交互模式）">⚙</button>
+        <button class="tb-btn" id="btnMin" title="最小化 / 展开（N）">–</button>
+      </div>
+
+      <div class="body" id="body">
+        <div class="row">
+          <span class="k">已运行</span>
+          <span class="v time" id="elapsed">00:00:00</span>
+        </div>
+        <div class="row">
+          <span class="k">状态</span>
+          <span class="v"><span class="st st-idle" id="status">等待中</span></span>
+        </div>
+        <div class="row">
+          <span class="k">剧情</span>
+          <span class="v" id="procName">—</span>
+        </div>
+        <div class="divider"></div>
+        <div class="lbl">当前执行</div>
+        <div class="curline empty" id="curline">等待脚本指令…</div>
+        <!-- 循环进度 -->
+        <div class="loop" id="loop">
+          <span class="lt">循环</span>
+          <span class="lv" id="loopText">0/0</span>
+          <span class="lbar" id="loopBar"></span>
+        </div>
+      </div>
+
+      <div class="mini">
+        <span class="mtime" id="mTime">00:00:00</span>
+        <span class="mst st st-idle" id="mStatus">等待中</span>
+        <!-- 最小化时的循环进度 -->
+        <span class="mloop" id="mLoop">0/0</span>
+      </div>
+
+      <div class="hint" id="hint">
+        <span class="on">N</span> 最小化 · <span class="on">K</span> 交互模式
+      </div>
+    </div>
+
+    <!-- 右下角派蒙画像（像素风，两帧交替眨眼） -->
+    <div class="paimon" id="paimon" title="派蒙 · 应急食品">
+      <img class="pm-frame pm-open" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACwAAAAsCAYAAAAehFoBAAABgUlEQVR42u3YoU4DQRAG4D4FEoluUITHIIhKBAKJRiFQqD5DRSWCZ+gjIJCEBEtSfLNkjv7J5rqzM9edm7sNN8mvbrr7dbppN53Npqqwvjc3gVIVtgp0G1sluqpjgRo9+PX5PFBGi+XO7miPBzCYaOoojAZMMMLgGHDBmR4MGZf2SLTLHWpVVWF7QQenqgprgg4D1f8Ah4HLHrz94tOlxwJchO2SfZ2cXpahXbD7EBbpFXwxfzwIh+J6Y2wKbQqmvqeHj4A0r2PAuV63CdPGKEA4cLbX6wwDEU9OAid7Lb4ptOB2cmC2dwL3+C0xgZO1Xv+l9EcD67hMWABv7u+aiGCXCQs/z8Cq0FYXINX9z+ji4wcuQVvfian5/fPnIGfXt03iSl1gcokL66X2UoOxWA6MdMUi7XU4sArdBXwMOrVGERgfuQTe7UJRNGB6pgJLeXtZZDH0XNOj2UvEXi1XReD4mdQn7QNL0XS9J8yCpXfpMeHcp1v0F5Y0PU1ojWP2/gU1ne2KFdQcqwAAAABJRU5ErkJggg==" alt="">
+      <img class="pm-frame pm-blink" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACwAAAAsCAYAAAAehFoBAAABZ0lEQVR42u3YsW4CMQwG4HuKjoydq06Ix6g6dGTowMgjdO7EMzAwdugz8AgdmCt1RYL9FOQDS9E1iR2c88UCS//CRcmHz0IRTXMvg7Xfzh3EFNYEuo81iTY1FljVg78/nx2kWmxsdqsdD8RgR0OjUA0YYIDBMYgFZ3o0pF/ckeiXOrRUmcIOgnZKZQpbBO1GqtsAu5GrPPjwF0/OmhJgETYnl3qYzGRoFewlgMVUD/axIfS9w6Xm2NQMF/mloMDTp4/g4aHPybUaYDywn1gXk2u1wKZGwhZ4szlHCsV9VDpMgLfLRRcSrNJhYiwQy0KXugCx7n8Dzu4wYAm69J0YFu9+j//y+Prexa/QBSYVv3C/0FlsMG6WAmNysZj+PjEwC50DvgYd2kMExldOgdvWicIBwzMWmMrP11sSA885azhnkdiX1VoE9p9R66hz0CLqrnaHo2DqW2p0OPV2RX9hUd3jBPa45uwTsgZBYcwqJuYAAAAASUVORK5CYII=" alt="">
+    </div>
+  </div>
+
+  <!-- 居中设置窗口（剧情列表） -->
+  <div class="mask" id="mask">
+    <div class="modal">
+      <div class="modal-inner">
+        <div class="modal-title">选择要执行的剧情</div>
+        <div class="count" id="pCount" style="font-size:12px;color:var(--px-dim);margin:-4px 0 10px">读取中…</div>
+      </div>
+
+      <div class="crumbs">
+        <span>目录</span>
+        <span class="sep">/</span>
+        <span class="here" id="pCwd">process</span>
+      </div>
+
+      <div class="toolbar">
+        <div class="seg" role="radiogroup" aria-label="列表筛选">
+          <button type="button" role="radio" aria-checked="false" data-seg="all">全部</button>
+          <button type="button" class="active" role="radio" aria-checked="true" data-seg="run">可执行</button>
+        </div>
+        <input class="search" id="pSearch" type="text" placeholder="筛选剧情或文件名">
+        <button class="btn" id="btnUp">返回上级</button>
+        <button class="btn" id="btnRefresh">重新读取</button>
+      </div>
+
+      <div id="pErrorBox"></div>
+
+      <div class="plist" id="plist">
+        <div class="list-head">
+          <span>类型</span>
+          <span>名称</span>
+          <span style="text-align:right">状态</span>
+          <span style="text-align:right">操作</span>
+        </div>
+        <div id="pBody"></div>
+      </div>
+
+      <div class="modal-inner" style="padding-top:0">
+        <div class="mfoot">
+          <button class="btn" id="btnCancel">取消</button>
+          <button class="btn primary" id="btnOk" disabled>确定切换</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 选择起始行窗口 -->
+  <div class="mask" id="maskLines">
+    <div class="modal">
+      <div class="modal-inner">
+        <div class="modal-title">从指定行开始运行</div>
+        <div class="modal-sub">
+          剧情：<b id="linesProcName">—</b><br>
+          点选一行作为<b>起点</b>；该行<b>之前</b>的指令会被全部跳过（不会执行）。<br>
+          <b>注释</b>与<b>块头</b>只作说明，<b>不可选</b>。
+        </div>
+        <div class="llegend" id="llegend">
+          <i class="lg-nav">■ 导航/点击</i>
+          <i class="lg-talk">■ 对话</i>
+          <i class="lg-fight">■ 战斗/队伍</i>
+          <i class="lg-flow">■ 等待/流程</i>
+          <i class="lg-ext">■ 扩展/脚本</i>
+          <i class="lg-cmt">■ 注释（不可选）</i>
+        </div>
+        <div class="llist" id="llist"></div>
+      </div>
+      <div class="modal-inner" style="padding-top:0">
+        <div class="mfoot">
+          <button class="btn" id="btnLinesCancel">取消</button>
+          <button class="btn primary" id="btnLinesOk">从选中行开始</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* HTML → JS 用 window.htmlMask.request()，chrome.webview.postMessage 仅作兜底 */
+  var hasMask = !!(window.htmlMask);
+  var hasWV   = !!(window.chrome && window.chrome.webview);
+
+  function sendToJs(url, data) {
+    // 首选：htmlMask.request
+    if (window.htmlMask && typeof window.htmlMask.request === 'function') {
+      try {
+        var p = window.htmlMask.request(url, data || {});
+        // request 返回 Promise，reject 时吞掉避免控制台报错
+        if (p && typeof p.catch === 'function') p.catch(function () {});
+        return;
+      } catch (e) { /* 继续尝试兜底通道 */ }
+    }
+    // 兜底：WebView2 原生通道
+    if (hasWV) {
+      try {
+        window.chrome.webview.postMessage(JSON.stringify({ url: url, data: data || {} }));
+      } catch (e) { /* 忽略 */ }
+    }
+  }
+
+
+  var S = {
+    elapsedMs: 0,
+    status: 'idle',        // idle | waiting | running | paused | done | abandoning
+    line: '',
+    lineNo: 0,
+    /* 循环进度：loopDone = 已完成次数，loopTotal = 最大次数（0 = 不显示） */
+    loopDone: 0,
+    loopTotal: 0,
+    process: '',
+    processes: [],         // [{name, path}]
+    minimized: false,
+    interactive: false,
+    lastMsgAt: 0,
+    /* 持续运行模式：脚本挂载着但不跑剧情 */
+    persistent: false,
+    /* 「从指定行开始」：选中的剧情名、起始行、行列表 */
+    linePickName: '',
+    linePickSel: 0,
+    linePickLines: [],
+    /* 运行时间基准：JS 侧不持续推送 elapsedMs，需记下基准值与基准时刻再本地推算 */
+    baseElapsed: 0,
+    baseAt: 0
+  };
+
+  /* 最小化指令去重：只处理 seq 更大的请求，保证一次按键只切换一次 */
+  var lastToggleSeq = -1;
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  /* 派蒙眨眼：每 4 秒闭眼 160ms */
+  (function pmBlink() {
+    var el = $('paimon');
+    if (!el) return;
+    var open = el.querySelector('.pm-open');
+    var blink = el.querySelector('.pm-blink');
+    if (!open || !blink) return;
+    setInterval(function () {
+      open.style.opacity = '0';
+      blink.style.opacity = '1';
+      setTimeout(function () {
+        open.style.opacity = '1';
+        blink.style.opacity = '0';
+      }, 160);
+    }, 4000);
+  })();
+
+
+
+  /** 用 JS 推送的值重新校准基准 */
+  function syncElapsed(ms) {
+    if (typeof ms !== 'number') return;
+    S.baseElapsed = ms;
+    S.baseAt = Date.now();
+    S.elapsedMs = ms;
+  }
+
+  /** 按基准推算当前已运行毫秒数 */
+  function currentElapsed() {
+    if (!S.baseAt) return S.baseElapsed;
+    return S.baseElapsed + (Date.now() - S.baseAt);
+  }
+
+
+  function fmtTime(ms) {
+    var t = Math.max(0, Math.floor(ms / 1000));
+    var h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return p(h) + ':' + p(m) + ':' + p(s);
+  }
+
+  /** 只更新时间显示（定时器每 250ms 调用） */
+  function renderTime() {
+    var t = fmtTime(currentElapsed());
+    var e = $('elapsed');
+    if (e) e.textContent = t;
+    var m = $('mTime');
+    if (m) m.textContent = t;
+  }
+
+  function statusView() {
+    // 箭头由闪烁的状态点承担
+    if (S.status === 'paused')      return { cls: 'st-pause', text: '已暂停（脚本）', dot: true };
+    if (S.status === 'done')        return { cls: 'st-done',  text: '已完成',         dot: true };
+    if (S.status === 'running')     return { cls: 'st-run',   text: '运行中',         dot: true };
+    if (S.status === 'abandoning')  return { cls: 'st-warn',  text: '正在放弃…',      dot: true };
+    // 持续运行模式的空闲态
+    if (S.status === 'waiting')     return { cls: 'st-wait',  text: '等待选择剧情',   dot: true };
+    return { cls: 'st-idle', text: '等待中', dot: true };
+  }
+
+  /** 循环进度条：显示「循环 N/M」+ 方块 */
+  function renderLoop() {
+    var box = $('loop');
+    if (!box) return;
+    var total = S.loopTotal | 0;
+    var done = S.loopDone | 0;
+
+    /* 最小化版同步显示 */
+    var ml = $('mLoop');
+    if (ml) {
+      if (total > 0) {
+        ml.textContent = done + '/' + total;
+        ml.className = 'mloop show' + (done >= total ? ' max' : '');
+      } else {
+        ml.className = 'mloop';
+      }
+    }
+
+    if (total <= 0) { box.className = 'loop'; return; }   // 不显示
+
+    var txt = $('loopText');
+    if (txt) txt.textContent = done + '/' + total;
+
+    // 已达上限 → 用警示色
+    box.className = 'loop show' + (done >= total ? ' max' : '');
+
+    var bar = $('loopBar');
+    if (bar) {
+      // 方块数量不超过 20 个
+      var shown = Math.min(total, 20);
+      var html = '';
+      for (var i = 0; i < shown; i++) {
+        // 按比例映射点亮
+        var lit = (done / total) > (i / shown);
+        html += '<i class="' + (lit ? 'on' : '') + '"></i>';
+      }
+      bar.innerHTML = html;
+    }
+  }
+
+  /** 底部提示（含呼吸动画）；最小化时文案不同 */
+  function renderHint() {    var el = $('hint');
+    if (!el) return;
+    if (S.minimized) {
+      el.innerHTML = '<span class="on">N</span> 展开面板';
+      return;
+    }
+    if (S.persistent && S.status === 'waiting') {
+      el.innerHTML = '<span class="on">⚙</span> 选择剧情开始 · <span class="on">N</span> 最小化';
+      return;
+    }
+    el.innerHTML = '<span class="on">N</span> 最小化 · ' +
+      (S.interactive
+        ? '<span class="on">K</span> 退出交互模式（当前可点击）'
+        : '<span class="on">K</span> 交互模式');
+  }
+
+  /** 放弃剧情按钮（图案 ⏏，与 ⚙ / – 风格一致） */
+  function renderAbandon() {
+    var btn = $('btnAbandon');
+    if (!btn) return;
+    var idle = (S.status === 'waiting');
+    btn.title = S.persistent
+      ? '放弃当前剧情（回到等待选择状态）'
+      : '放弃当前剧情并结束脚本';
+    // 空闲态没有剧情可放弃 → 置灰禁用
+    btn.disabled = idle;
+    btn.className = 'tb-btn danger' + (idle ? ' off' : '');
+  }
+
+  function render() {
+    S.elapsedMs = currentElapsed();
+    renderTime();
+
+    var sv = statusView();
+    var dotHtml = sv.dot ? '<span class="dot"></span>' : '';
+    var st = $('status');
+    st.className = 'st ' + sv.cls;
+    st.innerHTML = dotHtml + escapeHtml(sv.text);
+    var ms = $('mStatus');
+    ms.className = 'st ' + sv.cls;
+    ms.innerHTML = dotHtml + escapeHtml(sv.text);
+
+    $('procName').textContent = S.process || (S.status === 'waiting' ? '（未选择）' : '—');
+    $('procName').title = S.process || '';
+
+    var cl = $('curline');
+    if (S.line) {
+      cl.className = 'curline';
+      cl.innerHTML = (S.lineNo ? '<span class="ln">L' + S.lineNo + '</span>' : '') +
+        escapeHtml(S.line);
+    } else {
+      cl.className = 'curline empty';
+      cl.textContent = (S.persistent && S.status === 'waiting')
+        ? '请在设置中选择要运行的剧情…'
+        : '等待脚本指令…';
+    }
+
+    $('panel').className = 'panel' + (S.minimized ? ' min' : '');
+    $('btnMin').textContent = S.minimized ? '+' : '–';
+
+    renderHint();
+    renderAbandon();
+    renderLoop();
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+
+  /* 分辨率适配：最小化时向左平移，避开游戏右下角的技能图标 */
+  function applyLayout() {
+    try {
+      var w = (typeof window !== 'undefined' && window.innerWidth) || 1920;
+      var shift = Math.round(500 * w / 2560);
+      if (shift < 300) shift = 300;      // 窄屏也要足够左移
+      if (shift > 560) shift = 560;      // 超宽屏不要跑到屏幕中央
+      var root = document.documentElement;
+      if (root && root.style && root.style.setProperty) {
+        root.style.setProperty('--mini-shift', shift + 'px');
+      }
+    } catch (e) { /* 忽略 */ }
+  }
+
+  /* 剧情选择窗口（picker 版式）：分段筛选 + 搜索 + 目录浏览 + 内联 SVG 图标 */
+
+  /* SVG 图标（内联，无外部依赖） */
+  var P_ICONS = {
+    folder: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.2 4.3c0-.7.55-1.25 1.25-1.25h2.5c.4 0 .78.19 1.02.51l.86 1.14h4.1c.7 0 1.25.56 1.25 1.25v5.74c0 .7-.55 1.25-1.25 1.25H3.45c-.7 0-1.25-.56-1.25-1.25V4.3z"/></svg>',
+    file: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.95 3.3c0-.7.55-1.25 1.25-1.25h3.35L11.8 5.6v7.15c0 .7-.55 1.25-1.25 1.25H5.2c-.7 0-1.25-.56-1.25-1.25V3.3z"/><path d="M8.55 2.05V5.6H11.8"/></svg>',
+    story: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6.05"/><path d="M6.65 5.5 10.6 8l-3.95 2.5V5.5z" fill="currentColor" stroke="none"/></svg>'
+  };
+
+  /* 选择器的视图状态（由 JS 侧推送 /picker/state 填充） */
+  S.pickSeg = 'run';          // run（可执行） | all（全部）
+  S.pickQuery = '';
+  S.pickCwd = 'process';
+  S.pickUpTo = null;
+  S.pickFolders = [];
+  S.pickFiles = [];
+  S.pickSel = null;           // 当前选中的剧情 {name, path}
+  S.forcedPicker = false;     // 本次选择页是否由 JS 强制弹出（取消 = 结束脚本）
+
+  /** 是否匹配搜索词 */
+  function pMatches(text) {
+    if (!S.pickQuery) return true;
+    return String(text).toLowerCase().indexOf(S.pickQuery.toLowerCase()) !== -1;
+  }
+
+  /* 生成一行（类型 / 名称 / 状态 / 操作）
+     外层用 div 而非 button：内部还要放 ▶ 按钮，而 HTML 不允许 button 嵌套
+     button（浏览器会拆开结构，导致 ▶ 掉到下一行）。 */
+  function pMakeRow(iconKey, name, tag, opts) {
+    var cls = 'pitem' + (opts.selected ? ' sel' : '') + (opts.cur ? ' cur' : '');
+    var h = '<div role="button" tabindex="0" class="' + cls + '"';
+    if (opts.dataAttr) h += ' ' + opts.dataAttr;
+    h += '>';
+    h += '<span class="kind">' + (P_ICONS[iconKey] || P_ICONS.file) + '</span>';
+    h += '<span class="nm">' + escapeHtml(name) + '</span>';
+    h += '<span class="tag">' + escapeHtml(tag) + '</span>';
+    h += '<span class="op">';
+    if (opts.go) h += '<button class="go" data-go="' + escapeHtml(opts.go) + '" title="从指定行开始运行">▶</button>';
+    h += '</span></div>';
+    return h;
+  }
+
+  function renderList() {
+    var body = $('pBody');
+    var cwdEl = $('pCwd');
+    var countEl = $('pCount');
+    var upBtn = $('btnUp');
+    if (!body) return;
+    if (cwdEl) cwdEl.textContent = S.pickCwd;
+
+    var html = '';
+
+    if (S.pickSeg === 'run') {
+      /* 「可执行」段：扁平列出全部剧情 */
+      if (upBtn) upBtn.disabled = true;
+      var list = (S.processes || []).filter(function (p) { return pMatches(p.name); });
+      if (countEl) countEl.textContent = '共 ' + (S.processes || []).length + ' 个可用剧情';
+      if (!list.length) {
+        html = '<div class="lempty">' +
+          (S.pickQuery ? '没有匹配项' : 'process 目录下没有找到可执行剧情') + '</div>';
+      } else {
+        list.forEach(function (p) {
+          html += pMakeRow('story', p.name, 'process.json', {
+            selected: S.pickSel && S.pickSel.path === p.path,
+            cur: p.name === S.process,
+            dataAttr: 'data-name="' + escapeHtml(p.name) + '" data-path="' + escapeHtml(p.path || '') + '"',
+            go: p.name,
+          });
+        });
+      }
+      body.innerHTML = html;
+      return;
+    }
+
+    /* 「全部」段：目录浏览 */
+    if (upBtn) upBtn.disabled = (S.pickCwd === 'process' || !S.pickUpTo);
+    var folders = (S.pickFolders || []).filter(function (f) { return pMatches(f.name); });
+    var files = (S.pickFiles || []).filter(function (f) { return pMatches(f.name); });
+    if (countEl) countEl.textContent = '当前目录 ' + ((S.pickFolders || []).length + (S.pickFiles || []).length) + ' 项';
+
+    if (!folders.length && !files.length) {
+      body.innerHTML = '<div class="lempty">' +
+        (S.pickQuery ? '没有匹配项' : '当前目录是空的') + '</div>';
+      return;
+    }
+
+    folders.forEach(function (f) {
+      html += pMakeRow('folder', f.name, '进入', {
+        selected: false,
+        dataAttr: 'data-enter="' + escapeHtml(f.path) + '"',
+      });
+    });
+    files.forEach(function (f) {
+      var label = f.selectable ? (f.label || f.name) : f.name;
+      html += pMakeRow(f.selectable ? 'story' : 'file', label,
+        f.selectable ? '可执行' : '不可执行', {
+          selected: S.pickSel && S.pickSel.path === f.path,
+          cur: f.selectable && label === S.process,
+          dataAttr: 'data-name="' + escapeHtml(label) + '" data-path="' + escapeHtml(f.path) + '"' +
+            (f.selectable ? '' : ' disabled'),
+          go: f.selectable ? label : null,
+        });
+    });
+    body.innerHTML = html;
+  }
+
+  function renderSettings() {
+    renderList();
+  }
+
+  function openSettings() {
+    /* 每次打开都回到「可执行」段并重扫目录 */
+    S.pickSeg = 'run';
+    S.pickQuery = '';
+    S.pickSel = null;
+    var segBtns = document.querySelectorAll('#mask .seg button');
+    for (var i = 0; i < segBtns.length; i++) {
+      var on = segBtns[i].getAttribute('data-seg') === 'run';
+      segBtns[i].classList.toggle('active', on);
+      segBtns[i].setAttribute('aria-checked', on ? 'true' : 'false');
+    }
+    var sEl = $('pSearch');
+    if (sEl) sEl.value = '';
+    var okBtn = $('btnOk');
+    if (okBtn) okBtn.disabled = true;
+    var errEl = $('pErrorBox');
+    if (errEl) errEl.innerHTML = '';
+    renderList();
+    $('mask').classList.add('show');
+    // 打开设置时确保处于交互模式
+    if (!S.interactive) setInteractive(true);
+    // 请求 JS 侧推送目录树 + 剧情清单
+    sendToJs('/picker/refresh', { path: 'process' });
+  }
+  function closeSettings() {
+    $('mask').classList.remove('show');
+  }
+
+  /* 起始行选择窗口：点 ▶ 请求行列表，选一行后发送 /switch{name,startLine} */
+  function openLinePicker(name) {
+    S.linePickName = name;
+    S.linePickSel = 0;
+    S.linePickLines = [];
+    $('linesProcName').textContent = name;
+    $('llist').innerHTML = '<div class="lempty">正在读取指令列表…</div>';
+    $('maskLines').classList.add('show');
+    if (!S.interactive) setInteractive(true);
+    sendToJs('/lines', { name: name });
+  }
+
+  function closeLinePicker() {
+    $('maskLines').classList.remove('show');
+    S.linePickName = '';
+    S.linePickSel = 0;
+    S.linePickLines = [];
+  }
+
+  /* 指令类别 → CSS 类名 */
+  var CMD_CLASS = {
+    '地图追踪': 'c-nav', '点击': 'c-nav', '点击文字': 'c-nav',
+    '追踪图标': 'c-nav', '追踪委托': 'c-nav', '返回主界面': 'c-nav',
+    '等待返回主界面': 'c-nav', '交互': 'c-nav', '图像匹配': 'c-nav',
+    '对话': 'c-talk', '提示': 'c-talk',
+    '战斗': 'c-fight', '切换队伍': 'c-fight', '切换角色体型': 'c-fight',
+    '等待': 'c-flow', '暂停': 'c-flow', '切换': 'c-flow', '调时间': 'c-flow',
+    '按键': 'c-flow',
+    '注入': 'c-ext', '尝试': 'c-ext', '键鼠脚本': 'c-ext',
+    '自动拾取': 'c-ext',
+    '任务完成': 'c-done'
+  };
+
+  /* 不可选行的类别 → 类名 + 右侧标签 */
+  var KIND_META = {
+    comment: { cls: 'cmt', tag: '注释' },
+    meta: { cls: 'meta', tag: '元数据' },
+    header: { cls: 'head', tag: '块头' },
+    unknown: { cls: 'unk', tag: '未识别' }
+  };
+
+  function renderLines() {
+    var box = $('llist');
+    if (!box) return;
+    if (!S.linePickLines.length) {
+      box.innerHTML = '<div class="lempty">（该剧情没有可执行的指令，' +
+        '或尚未收到列表）</div>';
+      return;
+    }
+    var html = '';
+    for (var i = 0; i < S.linePickLines.length; i++) {
+      var it = S.linePickLines[i];
+      /* 可执行指令才可选；注释、元数据、块头一律不可选 */
+      var selectable = (it.selectable === undefined)
+        ? (it.kind === undefined || it.kind === 'instr')
+        : !!it.selectable;
+
+      var cls = 'lrow';
+      var tag = '';
+      if (selectable) {
+        cls += ' ' + (CMD_CLASS[it.cmd] || '');
+        if (it.line === S.linePickSel) cls += ' sel';
+      } else {
+        var m = KIND_META[it.kind] || KIND_META.unknown;
+        cls += ' ' + m.cls;
+        tag = '<span class="tag">' + m.tag + '</span>';
+      }
+      html += '<div class="' + cls + '" data-line="' + it.line + '"' +
+        (selectable ? '' : ' data-lock="1"') + '>' +
+        '<span class="lno">L' + it.line + '</span>' +
+        '<span class="ltx">' + escapeHtml(it.text) + '</span>' +
+        tag + '</div>';
+    }
+    box.innerHTML = html;
+  }
+
+
+  function setInteractive(on) {
+    S.interactive = !!on;
+    sendToJs('/interactive', { enabled: S.interactive });
+    render();
+  }
+
+
+  $('btnMin').addEventListener('click', function () {
+    S.minimized = !S.minimized; render();
+  });
+  $('btnSettings').addEventListener('click', openSettings);
+  /* 放弃剧情按钮：语义由 JS 侧按模式决定（持续运行 → 回等待选择，其他 → 结束脚本） */
+  $('btnAbandon').addEventListener('click', function () {
+    if (S.status === 'waiting') return;      // 空闲态无可放弃
+    sendToJs('/abandon', {});
+    S.status = 'abandoning';
+    render();
+  });
+  $('btnCancel').addEventListener('click', function () {
+    closeSettings();
+    setInteractive(false);   // 关闭设置后恢复点击穿透
+    /* 强制弹出的选择页：点取消 = 不执行任何剧情 → 脚本结束 */
+    if (S.forcedPicker) {
+      S.forcedPicker = false;
+      sendToJs('/picker/cancelled', {});
+    }
+  });
+  $('btnOk').addEventListener('click', function () {
+    /* 确认切换：优先用显式选中的项 */
+    var sel = S.pickSel;
+    if (!sel) {
+      var el = document.querySelector('#pBody .pitem.sel');
+      if (el && el.getAttribute('data-name')) {
+        sel = { name: el.getAttribute('data-name'), path: el.getAttribute('data-path') || '' };
+      }
+    }
+    if (!sel) { closeSettings(); setInteractive(false); return; }
+    sendToJs('/switch', { name: sel.name });
+    closeSettings();
+    setInteractive(false);
+  });
+
+  /* 列表点击（三列网格 + 目录进入 + ▶ 选行） */
+  function pOnPick(el) {
+    var name = el.getAttribute('data-name');
+    var path = el.getAttribute('data-path') || '';
+    if (!name) return;
+    S.pickSel = { name: name, path: path };
+    var okBtn = $('btnOk');
+    if (okBtn) okBtn.disabled = false;
+    var all = document.querySelectorAll('#pBody .pitem');
+    for (var i = 0; i < all.length; i++) all[i].classList.remove('sel');
+    el.classList.add('sel');
+  }
+
+  $('pBody').addEventListener('click', function (e) {
+    /* 先判断是否点了「▶ 从指定行开始」按钮 */
+    var go = e.target.closest ? e.target.closest('.go') : null;
+    if (go) {
+      var nm = go.getAttribute('data-go');
+      if (nm) { openLinePicker(nm); }
+      return;                      // 不要同时改变选中项
+    }
+    var it = e.target.closest ? e.target.closest('.pitem') : null;
+    if (!it) return;
+    /* 「全部」段里点目录 → 请求进入该目录 */
+    var enter = it.getAttribute('data-enter');
+    if (enter) { sendToJs('/picker/enter', { path: enter }); return; }
+    /* 不可执行的文件不可选 */
+    if (it.hasAttribute('disabled')) return;
+    pOnPick(it);
+  });
+
+  /* 分段筛选（全部 / 可执行） */
+  (function () {
+    var segBtns = document.querySelectorAll('#mask .seg button');
+    for (var i = 0; i < segBtns.length; i++) {
+      segBtns[i].addEventListener('click', function () {
+        S.pickSeg = this.getAttribute('data-seg');
+        for (var k = 0; k < segBtns.length; k++) {
+          var on = segBtns[k] === this;
+          segBtns[k].classList.toggle('active', on);
+          segBtns[k].setAttribute('aria-checked', on ? 'true' : 'false');
+        }
+        /* 切到「全部」时从根目录重新加载 */
+        if (S.pickSeg === 'all') sendToJs('/picker/refresh', { path: 'process' });
+        renderList();
+      });
+    }
+  })();
+
+  /* 搜索（与分段筛选叠加生效） */
+  $('pSearch').addEventListener('input', function () {
+    S.pickQuery = this.value.trim();
+    renderList();
+  });
+  /* 输入框聚焦时通知 JS 侧屏蔽 N/K 热键（否则打字会误触最小化/退出交互） */
+  $('pSearch').addEventListener('focus', function () {
+    sendToJs('/inputFocus', { focused: true });
+  });
+  $('pSearch').addEventListener('blur', function () {
+    sendToJs('/inputFocus', { focused: false });
+  });
+
+  /* 返回上级 / 重新读取 */
+  $('btnUp').addEventListener('click', function () {
+    if (S.pickUpTo) sendToJs('/picker/up', { path: S.pickUpTo });
+  });
+  $('btnRefresh').addEventListener('click', function () {
+    sendToJs('/picker/refresh', { path: S.pickCwd || 'process' });
+    var c = $('pCount');
+    if (c) c.textContent = '重新读取中…';
+  });
+  // 点击设置窗口外的空白 → 退出交互模式
+  $('mask').addEventListener('mousedown', function (e) {
+    if (e.target === $('mask')) { closeSettings(); setInteractive(false); }
+  });
+
+
+  $('llist').addEventListener('click', function (e) {
+    var row = e.target.closest ? e.target.closest('.lrow') : null;
+    if (!row) return;
+    /* 注释 / 元数据 / 块头 / 未识别 行不可选 */
+    if (row.getAttribute('data-lock')) return;
+    var ln = parseInt(row.getAttribute('data-line'), 10) || 0;
+    if (!ln) return;
+    S.linePickSel = ln;
+    var all = $('llist').querySelectorAll('.lrow');
+    for (var i = 0; i < all.length; i++) all[i].classList.remove('sel');
+    row.classList.add('sel');
+  });
+  /* 取消只关闭起始行窗口，回到剧情选择页并保持交互模式 */
+  $('btnLinesCancel').addEventListener('click', function () {
+    closeLinePicker();
+  });
+  $('btnLinesOk').addEventListener('click', function () {
+    if (!S.linePickSel) return;                 // 未选行 → 不响应
+    /* 确认时再校验一次选中行确实可选 */
+    var okRow = false;
+    for (var i = 0; i < S.linePickLines.length; i++) {
+      var it = S.linePickLines[i];
+      var sel = (it.selectable === undefined)
+        ? (it.kind === undefined || it.kind === 'instr')
+        : !!it.selectable;
+      if (it.line === S.linePickSel && sel) { okRow = true; break; }
+    }
+    if (!okRow) return;
+    sendToJs('/switch', { name: S.linePickName, startLine: S.linePickSel });
+    /* 确认后才两层一起关，此时退出交互模式 */
+    closeLinePicker();
+    closeSettings();
+    setInteractive(false);
+  });
+  /* 点起始行窗口外的空白 → 同样只退回剧情选择页 */
+  $('maskLines').addEventListener('mousedown', function (e) {
+    if (e.target === $('maskLines')) { closeLinePicker(); }
+  });
+
+
+  function onMessage(msg) {
+    if (!msg || typeof msg !== 'object') return;
+    S.lastMsgAt = Date.now();
+
+    var url = msg.url, data = msg.data || {};
+
+    if (url === '/init') {
+      if (data.processes) S.processes = data.processes;
+      if (data.current) S.process = data.current;
+      if (data.status) S.status = data.status;
+      syncElapsed(data.elapsedMs);
+    } else if (url === '/progress') {
+      syncElapsed(data.elapsedMs);
+      if (data.status) S.status = data.status;
+      if (data.process) S.process = data.process;
+      if (typeof data.line === 'string') S.line = data.line;
+      if (typeof data.lineNo === 'number') S.lineNo = data.lineNo;
+    } else if (url === '/status') {
+      if (data.status) S.status = data.status;
+      syncElapsed(data.elapsedMs);
+    } else if (url === '/line') {
+      S.line = data.line || '';
+      S.lineNo = data.lineNo || 0;
+      syncElapsed(data.elapsedMs);
+    } else if (url === '/loop') {
+      /* 循环进度：done=0 && total=0 表示清除 */
+      S.loopDone = data.done || 0;
+      S.loopTotal = data.total || 0;
+      renderLoop();
+      return;                    // 只更新进度，不必整页 render
+    } else if (url === '/processes') {
+      S.processes = data.processes || [];
+      if (data.current) S.process = data.current;
+    } else if (url === '/picker/state') {
+      /* 剧情选择器的目录树与剧情清单（picker 协议） */
+      var payload = data || {};
+      var errBox = $('pErrorBox');
+      if (errBox) errBox.innerHTML = '';
+      if (!payload.ok) {
+        /* 直接写「读取失败」，不走 renderList() */
+        var cEl = $('pCount');
+        if (cEl) cEl.textContent = '读取失败';
+        var bodyEl = $('pBody');
+        if (bodyEl) bodyEl.innerHTML = '<div class="lempty">读取失败，请点「重新读取」重试</div>';
+        if (errBox) {
+          errBox.innerHTML = '<div class="error" style="margin:0 20px 12px;padding:10px 12px;' +
+            'border-radius:7px;background:var(--danger-soft);color:#b42318;font-size:12px">' +
+            '读取目录失败：' + escapeHtml(String(payload.error || '未知错误')) + '</div>';
+        }
+        return;
+      }
+      var view = payload.view || {};
+      S.pickCwd = view.cwd || 'process';
+      S.pickUpTo = view.upTo || null;
+      S.pickFolders = view.folders || [];
+      S.pickFiles = view.files || [];
+      S.processes = payload.processes || S.processes || [];
+      /* 选中项若已不在列表里，清空选择 */
+      var stillThere = S.pickSel && (S.pickFolders.concat(S.pickFiles).some(function (f) {
+        return f.path === S.pickSel.path;
+      })) || (S.pickSel && S.processes.some(function (p) { return p.path === S.pickSel.path; }));
+      if (S.pickSel && !stillThere) {
+        S.pickSel = null;
+        var okB = $('btnOk');
+        if (okB) okB.disabled = true;
+      }
+      renderList();
+      return;                      // 不整页 render，避免覆盖交互状态
+    } else if (url === '/toggle') {
+      /* 最小化切换（N 键）：用 seq 去重，切换后回执 /toggle-ack */
+      var seq = (typeof data.seq === 'number') ? data.seq : 0;
+      if (seq > lastToggleSeq) {
+        lastToggleSeq = seq;
+        S.minimized = !S.minimized;        // N 键最小化
+        sendToJs('/toggle-ack', { seq: seq, minimized: S.minimized });
+      }
+      // seq <= lastToggleSeq：重复投递，忽略
+    } else if (url === '/interactive') {
+      S.interactive = !!data.enabled;
+    } else if (url === '/mode') {
+      // 持续运行模式开关（JS 侧 setPersistentMode 推送）
+      S.persistent = !!data.persistent;
+    } else if (url === '/openPicker') {
+      /* 强制弹出选择页：记下当前剧情名用于高亮，并标记为强制弹出（取消时回传 /picker/cancelled） */
+      S.forcedPicker = true;
+      if (data.current) S.process = data.current;
+      openSettings();
+      return;                    // openSettings 内部已处理遮罩与刷新
+    } else if (url === '/lines') {
+      // 收到带行号指令列表 → 渲染起始行选择窗口
+      if (data.name && data.name === S.linePickName) {
+        S.linePickLines = Array.isArray(data.lines) ? data.lines : [];
+        /* 默认选中第一条可选指令（跳过开头的注释/元数据） */
+        S.linePickSel = 0;
+        for (var i = 0; i < S.linePickLines.length; i++) {
+          var it = S.linePickLines[i];
+          var ok = (it.selectable === undefined)
+            ? (it.kind === undefined || it.kind === 'instr')
+            : !!it.selectable;
+          if (ok) { S.linePickSel = it.line; break; }
+        }
+        renderLines();
+        return;                    // 不需要整页 render
+      }
+    }
+    render();
+  }
+
+  if (hasMask) {
+    window.htmlMask.onMessage = onMessage;
+  }
+  if (hasWV) {
+    window.chrome.webview.addEventListener('message', function (ev) {
+      var m = ev.data;
+      if (typeof m === 'string') { try { m = JSON.parse(m); } catch (e) { return; } }
+      onMessage(m);
+    });
+  }
+
+  // 布局适配（写入 --mini-shift）
+  applyLayout();
+  if (typeof window.addEventListener === 'function') {
+    window.addEventListener('resize', applyLayout);
+  }
+
+  /* 入场动画：结束后移除 enter 类 */
+  (function playEnter() {
+    var panel = $('panel');
+    if (!panel || !panel.classList) return;
+    panel.classList.add('enter');
+    var clear = function () { try { panel.classList.remove('enter'); } catch (e) { } };
+    if (typeof setTimeout === 'function') setTimeout(clear, 500);
+    else clear();
+  })();
+
+  /* 本地计时器：JS 侧不推送时时间也照常走秒 */
+  if (typeof setInterval === 'function') {
+    setInterval(function () {
+      if (!S.baseAt) return;
+      renderTime();
+    }, 250);
+  }
+
+  // 通知 JS 侧：页面已就绪
+  // （JS 侧 showOverlay 会 await 这条消息）
+  sendToJs('/ready', {});
+
+
+  if (!hasMask && !hasWV) {
+    S.processes = [
+        { name: '示例剧情A', path: 'process\\示例剧情A\\process.json' },
+        { name: '示例剧情B', path: 'process\\示例剧情B\\process.json' }
+      ];
+    S.process = '示例剧情A';
+    S.status = 'running';
+    S.line = '地图追踪 示例剧情-1.json';
+    S.lineNo = 42;
+    S.lastMsgAt = Date.now();
+    syncElapsed(0);
+    var demoLines = [
+      '地图追踪 示例剧情-1.json',
+      '等待 3000',
+      '点击 1840,1000',
+      '对话 凯文',
+      '切换队伍 战斗 否',
+      '战斗',
+      '任务完成'
+    ];
+    var di = 0;
+    setInterval(function () {
+      di = (di + 1) % demoLines.length;
+      S.line = demoLines[di];
+      S.lineNo = 42 + di;
+      S.lastMsgAt = Date.now();
+      render();
+    }, 1000);
+    console.log('[overlay] 未检测到 htmlMask，已进入 demo 预览模式');
+  }
+
+  render();
+})();
+</script>
+</body>
+</html>

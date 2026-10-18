@@ -1,4 +1,46 @@
-import { chooseProcess } from 'picker.js';
+
+
+import {
+  initOverlay,
+  showOverlay,
+  disposeOverlay,
+  sendProgress,
+  sendProcessList,
+  resetElapsed,
+  sendCurrentLine,
+  sendLoopProgress,
+  notifyPause,
+  notifyResume,
+  notifyDone,
+  notifyWaiting,
+  consumeSwitchRequest,
+  hasSwitchRequest,
+  setPersistentMode,
+  isPersistentMode,
+  consumeAbandonRequest,
+  hasAbandonRequest,
+  hasPickerCancelled,
+  consumePickerCancelled,
+  hasInterruptRequest,
+  consumeStartLine,
+  hasStartLine,
+  setLineListProvider,
+  resetPickerCache,
+  openPicker,
+  pumpAndBeat,
+  initKeyHook,
+  subscribeKey,
+  unsubscribeKey,
+  waitWhileInteracting,
+} from "./utils/overlay.js";
+
+// 参数重载与循环决策（纯函数）
+import {
+  parseRepeatableArgs,
+  decideRepeat,
+  needsRepeat,
+  MAIN_UI_KEYWORD,
+} from "./utils/dsl.js";
 
 (async function () {
   // 版本和编译信息
@@ -8,13 +50,73 @@ import { chooseProcess } from 'picker.js';
   // 读取设置
   const team = settings.team || "";
   const elementTeam = settings.elementTeam || "";
+  const selectedProcessInit = settings.process_selector || "刷新剧情列表";
+  let selectedProcess = selectedProcessInit;   // 运行面板「切换剧情」需改写
   let relativePath;
+
+  // 「强制在HTML中选择剧情」：勾选后启动时弹出选择页，以页面选择为准
+  const forceHtmlPicker = !!settings.forceHtmlPicker;
+
+  // 暂停通知的上下文：当前剧情名 + 当前执行的 DSL 行
+  let notifyCtx = { process: '', line: 0, raw: '' };
+
   async function errorlog() {
     // 输出版本和编译时间信息
     log.info("=".repeat(20));
     log.info("版本: {version}", VERSION);
     log.info("编译时间: {buildTime}", BUILD_TIME);
     log.info("=".repeat(20));
+  }
+
+
+  // 暂停增强：暂停前按键 + 带上下文的暂停通知
+
+
+  /** 记录当前正在执行的行，供暂停通知使用 */
+  function setNotifyContext(instr) {
+    notifyCtx.line = (instr && instr.line) || 0;
+    notifyCtx.raw = (instr && (instr.raw || instr.type)) || '';
+  }
+
+  /** 记录「当前运行哪个剧情」（由 Main 在开始/切换剧情时调用） */
+  function setNotifyProcess(name) {
+    notifyCtx.process = name || '';
+  }
+
+  /** 暂停前按键操作（实验性）：未配置则跳过，失败不影响暂停流程 */
+  function pressPauseBeforeKey() {
+    const key = String(settings.pauseBeforeKey || '').trim();
+    if (!key) return;                       // 没填 → 不操作
+    try {
+      keyPress(key);
+      log.info(`暂停前按键操作：已按下 ${key}`);
+    } catch (e) {
+      log.warn(`暂停前按键操作失败（键名 ${key}）：${e && e.message}`);
+    }
+  }
+
+  /** 组装暂停通知：当前运行：剧情名，第 N 行 DSL 原文，原因 */
+  function buildPauseNotice(reason) {
+    const name = notifyCtx.process || '（未选择剧情）';
+    const parts = [`当前运行：${name}`];
+    if (notifyCtx.line) {
+      // 截断过长的 DSL 原文（通知单条上限 500 字符）
+      const raw = String(notifyCtx.raw || '').trim();
+      const shown = raw.length > 120 ? raw.slice(0, 120) + '…' : raw;
+      parts.push(`第${notifyCtx.line}行 ${shown}`);
+    }
+    parts.push(reason || '未知原因');
+    parts.push('脚本已暂停，请手动操作游戏');
+    return parts.join('，');
+  }
+
+  /** 暂停时的统一入口：先按暂停前按键，再发通知 */
+  function pauseNotice(reason) {
+    pressPauseBeforeKey();
+    const msg = buildPauseNotice(reason);
+    log.warn(msg);
+    if (settings.xiaoxitongzhi) notification.error(msg);
+    return msg;
   }
 
   // 统一常量定义
@@ -1207,6 +1309,7 @@ processKeyPress: async (step) => {
       const blocks = [];
       const meta = { author: "", description: "" };
       let currentBlock = null;
+      let lineNo = 0;                   // 当前行号（1 起算，供运行面板显示）
 
       const isComment = (line) => {
         const t = line.trim();
@@ -1225,6 +1328,7 @@ processKeyPress: async (step) => {
       };
 
       for (let raw of lines) {
+        lineNo++;                       
         // 去注释尾部
         let line = raw;
         const cmtIdx1 = line.indexOf("#");
@@ -1268,10 +1372,17 @@ processKeyPress: async (step) => {
         const arg = parts.join(" ").trim();
 
         const pushInstr = (type, data = null) => {
-          currentBlock.instructions.push({ type, data });
+          // line / raw 供运行面板显示当前执行行
+          currentBlock.instructions.push({ type, data, line: lineNo, raw: line });
         };
 
         switch (cmd) {
+          case "注入":
+            pushInstr("注入", arg)
+            break;
+          case "尝试":
+            pushInstr("尝试", arg)
+            break;
           case "地图追踪":
             pushInstr("地图追踪", arg);
             break;
@@ -1367,7 +1478,13 @@ processKeyPress: async (step) => {
     },
 
     // 执行扩展的简单格式脚本
-    executeSimpleScriptFlow: async (simpleScript, process_path) => {
+
+    // startLine：从 process.json 的第几行开始执行（真实文件行号，1 起算；0 = 从头）
+
+
+
+
+    executeSimpleScriptFlow: async (simpleScript, process_path, startLine) => {
       const isInMainUI = UIUtils.createMainUIChecker();
       const META = simpleScript.meta || {};
       const BLOCKS = Array.isArray(simpleScript.blocks) ? simpleScript.blocks : [];
@@ -1376,6 +1493,18 @@ processKeyPress: async (step) => {
 
       if (META.author) log.info("作者: {author}", META.author);
       if (META.description) log.info("描述: {desc}", META.description);
+
+      // 从指定行开始：丢弃该行之前的指令
+      const startAt = Number(startLine) || 0;
+      if (startAt > 1) {
+        let dropped = 0;
+        for (const block of BLOCKS) {
+          const before = block.instructions.length;
+          block.instructions = block.instructions.filter(i => (i.line || 0) >= startAt);
+          dropped += before - block.instructions.length;
+        }
+        log.info(`从第 ${startAt} 行开始执行（已跳过前 ${dropped} 条指令）`);
+      }
 
       // 建立描述 -> 块 列表映射，保持顺序
       const groupMap = new Map();
@@ -1412,16 +1541,228 @@ processKeyPress: async (step) => {
         return best.sim >= 0.9 ? best.descNorm : null;
       };
 
+      // 参数重载：格式 1 路径名 / 格式 2 路径名 次数 主界面 boolean /
+      // 格式 3 路径名 次数 图片路径 boolean1 boolean2（详见 utils/dsl.js）
+
+      /** 暂停并等待用户按暂停键继续（供超出最大循环次数时使用） */
+      const pauseForManual = async (reason) => {
+        const stopkey = settings.pause;   // 与「注入」用同一个暂停键配置
+        let isPaused = true;
+        let pauseKeyHandler = null;
+        try {
+          notifyPause(reason || "超出最大执行次数");   // 面板显示暂停
+          // 先按暂停前按键，再发带上下文的通知
+          pauseNotice(reason || "超出最大循环次数");
+          log.warn(`完成后按 ${stopkey} 键继续...`);
+
+          // 走共享按键钩子，不自己 new KeyMouseHook()
+          pauseKeyHandler = function (pressedKey) {
+            if (String(pressedKey) === String(stopkey)) {
+              isPaused = false;
+              log.info(`已检测到 ${stopkey} 键，准备继续执行`);
+            }
+          };
+          if (!subscribeKey(pauseKeyHandler)) {
+            log.error(`无法注册暂停键 ${stopkey}，脚本将无法继续（请检查 BetterGI 版本）`);
+          }
+          while (isPaused) {
+            await sleep(100);
+            pumpAndBeat();          // 暂停期间保持收信：可切换剧情、N/K 热键仍可用
+          }
+          log.info("脚本继续执行...");
+          notifyResume();           // 面板恢复「运行中」
+        } catch (error) {
+          log.error("暂停等待时出错: {error}", error.message);
+        } finally {
+          unsubscribeKey(pauseKeyHandler);   // 只注销回调，不销毁共享钩子
+        }
+      };
+
+      /** 模板匹配：判断指定图片是否出现在游戏画面上 */
+      const matchTemplateOnScreen = async (imagePath, process_path) => {
+        const dir = process_path.replace(/[^\\/]+$/, "");
+        const fullPath = dir + imagePath;
+        let template = null;
+        let screen = null;
+        try {
+          template = file.ReadImageMatSync(fullPath);
+          screen = captureGameRegion();
+          const ro = RecognitionObject.templateMatch(template, 0, 0, 1920, 1080);
+          ro.Threshold = 0.8;
+          const found = screen.find(ro);
+          return !found.isEmpty();
+        } catch (e) {
+          log.error("循环条件模板匹配失败: {path}，错误：{err}", fullPath, e.message);
+          return false;              // 匹配失败按「未命中」处理
+        } finally {
+          try { if (screen) screen.dispose(); } catch (e) { /* 忽略 */ }
+          try { if (template) template.dispose(); } catch (e) { /* 忽略 */ }
+        }
+      };
+
+      /** 带「最大次数 + 跳出条件」的重复执行 */
+      const runWithRepeat = async (parsed, runOnce, process_path, instr) => {
+        // 次数为 0 → 跳过此条（不执行，也不暂停）
+        if (parsed.maxCount === 0) {
+          log.info(`循环次数为 0，跳过此条指令: ${instr.raw || instr.type}`);
+          return 'done';
+        }
+
+        let executed = 0;
+        while (true) {
+          // 每轮开始前检查切换/放弃请求
+          if (shouldSwitch()) return 'switched';
+
+          await runOnce();
+          executed++;
+
+          // 计算本轮的判定值
+          let matched = null;
+          if (parsed.condition === 'mainui') {
+            matched = isInMainUI();
+          } else if (parsed.condition === 'image') {
+            matched = await matchTemplateOnScreen(parsed.image, process_path);
+          }
+
+          const verdict = decideRepeat(parsed, executed, matched);
+
+          // 把循环进度推给面板
+          if (verdict.action === 'run') {
+            log.info(`第 ${executed}/${parsed.maxCount} 次完成：${verdict.reason}`);
+            sendLoopProgress(instr, executed, parsed.maxCount);
+          } else {
+            log.info(`循环结束（已执行 ${executed} 次）：${verdict.reason}`);
+          }
+
+          if (verdict.action === 'stop') return 'done';
+          if (verdict.action === 'pause') {
+            await pauseForManual(verdict.reason);
+            return 'done';
+          }
+          await sleep(200);          // 轮间短暂间隔
+        }
+      };
+
       const executeInstruction = async (instr) => {
         const type = instr.type;
         const data = instr.data;
         switch (type) {
-          case "地图追踪":
-            await StepProcessor.processMapTracking({ data }, process_path);
+          case "注入": {
+            let pluginErrorInformation
+            // data 是外部 js 文件路径，读取后作为代码执行
+            try {
+              // 路径清洗：去掉开头斜杠，补 .js 后缀
+              let filePath = String(data || "").trim();
+              if (!filePath) {
+                log.warn("注入指令缺少文件路径，已跳过");
+                break;
+              }
+              if (filePath.startsWith("/")) filePath = filePath.slice(1);
+              if (filePath.startsWith("\\")) filePath = filePath.slice(1);
+              if (!filePath.endsWith(".js")) filePath += ".js";
+
+              // 读取 js 文件内容
+              const injectedCode = file.readTextSync(filePath);
+
+              eval(injectedCode);
+              log.info("注入脚本成功: {path}", filePath);
+                pluginErrorInformation = await pluginMethod()
+            } catch (injectError) {
+              log.error("注入脚本失败: {path}，错误：{err}", String(data), injectError.message);
+            }
+            if (!pluginErrorInformation) {
+              let isPaused = true;
+              let pauseKeyHandler = null;   // 暂停键回调（共享钩子）
+              let stopkey = settings.pause //定义暂停键(可能多此一举？)
+              try {
+                await sleep(1000);//暂停前等待（似乎没用吧）
+                notifyPause("注入失败");        // 面板显示暂停
+                // 先按暂停前按键，再发带上下文的通知
+                pauseNotice("注入脚本运行失败（超出最大尝试次数）");
+
+                if(data)
+                {
+                  log.warn('{data} <-\n     plugin脚本运行失败，请按照指示手动完成',data);
+                }
+                log.warn(`完成后按 ${stopkey} 键继续...`);
+                // 走共享按键钩子，不自己 new KeyMouseHook()
+                pauseKeyHandler = function (pressedKey) {
+                  if (String(pressedKey) === String(stopkey)) {
+                    isPaused = false;
+                    log.info(`已检测到 ${stopkey} 键，准备继续执行`);
+                  }
+                };
+                if (!subscribeKey(pauseKeyHandler)) {
+                  log.error(`无法注册暂停键 ${stopkey}，脚本将无法继续（请检查 BetterGI 版本）`);
+                }
+                // 等待按下暂停键
+                while (isPaused) {
+                  await sleep(100); // 等待减少资源消耗
+                  pumpAndBeat();   // 暂停期间保持收信：可切换剧情、N/K 热键仍可用
+                }
+                log.info("脚本继续执行...");
+                notifyResume();                 // 面板恢复「运行中」
+              } catch (error) {
+                log.error("发生错误:", error);
+              } finally {
+                // 释放键鼠资源
+                unsubscribeKey(pauseKeyHandler);   // 只注销回调，不销毁共享钩子
+                log.info("已释放资源");
+              }
+
+
+            }
             break;
-          case "键鼠脚本":
-            await StepProcessor.processKeyMouseScript({ data }, process_path);
+          }
+          case "尝试":{
+            eval(data)
             break;
+          }
+
+          case "地图追踪": {
+            // 参数重载：格式 1 直接执行一次，格式 2/3 进入循环
+            const mp = parseRepeatableArgs(data);
+            if (!mp.ok) {
+              log.warn(`地图追踪参数解析失败（${mp.error}），按格式 1 执行: ${data}`);
+              await StepProcessor.processMapTracking({ data: String(data || '').trim().split(/\s+/)[0] }, process_path);
+              break;
+            }
+            if (!needsRepeat(mp)) {
+              // 格式 1（或次数为 0）→ 与原行为一致
+              if (mp.maxCount === 0) {
+                log.info(`循环次数为 0，跳过此条指令: ${instr.raw || instr.type}`);
+                break;
+              }
+              log.info(mp.path);
+              await StepProcessor.processMapTracking({ data: mp.path }, process_path);
+              break;
+            }
+            await runWithRepeat(mp, async () => {
+              await StepProcessor.processMapTracking({ data: mp.path }, process_path);
+            }, process_path, instr);
+            break;
+          }
+          case "键鼠脚本": {
+            // 与「地图追踪」同样的参数重载逻辑
+            const km = parseRepeatableArgs(data);
+            if (!km.ok) {
+              log.warn(`键鼠脚本参数解析失败（${km.error}），按格式 1 执行: ${data}`);
+              await StepProcessor.processKeyMouseScript({ data: String(data || '').trim().split(/\s+/)[0] }, process_path);
+              break;
+            }
+            if (!needsRepeat(km)) {
+              if (km.maxCount === 0) {
+                log.info(`循环次数为 0，跳过此条指令: ${instr.raw || instr.type}`);
+                break;
+              }
+              await StepProcessor.processKeyMouseScript({ data: km.path }, process_path);
+              break;
+            }
+            await runWithRepeat(km, async () => {
+              await StepProcessor.processKeyMouseScript({ data: km.path }, process_path);
+            }, process_path, instr);
+            break;
+          }
           case "对话": {
             // 优先点击NPC名
             await DialogProcessor.executeAutoTalk(data);
@@ -1470,7 +1811,7 @@ processKeyPress: async (step) => {
           break;
           case "等待":
             log.info("等待{data}毫秒", data);
-            await sleep(typeof data === "number" ? data : 5000);
+            await sleepChunked(typeof data === "number" ? data : 5000);
             break;
           case "自动拾取":
             if(data === "关闭")
@@ -1492,39 +1833,44 @@ processKeyPress: async (step) => {
             return "DONE";
           case "暂停":
 			let isPaused = true;
-			let hook = null;   
+			let pauseKeyHandler = null;   // 暂停键回调（共享钩子）
 			let stopkey = settings.pause //定义暂停键(可能多此一举？)
 			try {
-				await sleep(1000);//暂停前等待（似乎没用吧）
-				log.warn("脚本已暂停，请手动操作游戏");
-        if(settings.xiaoxitongzhi)notification.error("脚本已暂停，请手动操作游戏");
-        if(data)
-        {
-          log.warn('作者提示：{data}',data);
-        }
+              notifyPause("暂停指令");           // 面板显示暂停
+              await sleep(1000);//暂停前等待（似乎没用吧）
+              // 先按暂停前按键，再发带上下文的通知（原因带作者提示）
+              pauseNotice(data ? `暂停指令（作者提示：${data}）` : "暂停指令");
+              if(data)
+              {
+                log.warn('作者提示：{data}',data);
+              }
 				log.warn(`完成后按 ${stopkey} 键继续...`);
-				hook = new KeyMouseHook();  // 注册按键回调
-				hook.OnKeyDown(function(stopkeykey) {
-					// 判断是否是暂停键
-					if (stopkeykey === stopkey) {
-						isPaused = false;
-						log.info(`已检测到 ${stopkey} 键，准备继续执行`);
-					}
-				});       
+				// 走共享按键钩子，不自己 new KeyMouseHook()
+				pauseKeyHandler = function (pressedKey) {
+				  if (String(pressedKey) === String(stopkey)) {
+				    isPaused = false;
+				    log.info(`已检测到 ${stopkey} 键，准备继续执行`);
+				  }
+				};
+				if (!subscribeKey(pauseKeyHandler)) {
+				  log.error(`无法注册暂停键 ${stopkey}，脚本将无法继续（请检查 BetterGI 版本）`);
+				}
 				// 等待按下暂停键
 				while (isPaused) {
 					await sleep(100); // 等待减少资源消耗
+				  pumpAndBeat();   // 暂停期间保持收信：可切换剧情、N/K 热键仍可用
 				}      
 				log.info("脚本继续执行...");
 			} catch (error) {
 				log.error("发生错误:", error);
 			} finally {
 				// 释放键鼠资源
-					hook.dispose();
+					unsubscribeKey(pauseKeyHandler);   // 只注销回调，不销毁共享钩子
 					log.info("已释放资源");
 			} 
 			// 继续执行其他任务
 			log.info("执行后续任务...");
+			notifyResume();                     // 面板恢复「运行中」
 			await sleep(1000);
 			break;
           case "战斗":
@@ -1741,6 +2087,37 @@ processKeyPress: async (step) => {
         }
         return "OK";
       };
+
+      // 分片等待：把长等待切成小段，每段之间收信/投递
+      const sleepChunked = async (totalMs, chunkMs) => {
+        const step = chunkMs || 500;
+        let left = Math.max(0, Number(totalMs) || 0);
+        while (left > 0) {
+          await waitWhileInteracting();      // 交互模式 → 在此暂停
+          const d = Math.min(step, left);
+          await sleep(d);
+          left -= d;
+          pumpAndBeat();
+          if (hasInterruptRequest()) return;  // 切换/放弃 → 提前结束等待
+        }
+      };
+
+      // 指令执行包装：向运行面板汇报当前行，并轮询面板消息
+      const runInstr = async (instr) => {
+        // 交互模式（按 K）时在此暂停
+
+        await waitWhileInteracting();
+        sendCurrentLine(instr);                    // 推送当前执行的 DSL 行
+        // 记录当前行供暂停通知使用
+        setNotifyContext(instr);
+        pumpAndBeat();                             // 收取面板消息 + 投递热键指令
+        const res = await executeInstruction(instr);
+        pumpAndBeat();
+        return res;
+      };
+
+      /** 是否有待处理的切换/放弃请求 */
+      const shouldSwitch = () => hasInterruptRequest();
       
       //await StepProcessor.processAutoTask({ data: { action: "enable", taskType: "AutoSkip" } });
 
@@ -1753,7 +2130,8 @@ processKeyPress: async (step) => {
         //log.info("位置: {path}", process_path);
         while (0 < defaultBlock.instructions.length) {
           const instr = defaultBlock.instructions[0];
-          const res = await executeInstruction(instr);
+          const res = await runInstr(instr);
+          if (shouldSwitch()) return true;        // 用户请求切换 → 中断当前剧情
 
           log.info("当前流程执行完毕，更新断点文件");
           defaultBlock.instructions.splice(0, 1);
@@ -1832,7 +2210,8 @@ processKeyPress: async (step) => {
 
         // 执行块内指令
         for (const instr of blockToRun.instructions) {
-          const res = await executeInstruction(instr);
+          const res = await runInstr(instr);
+          if (shouldSwitch()) return true;        // 用户请求切换 → 中断当前剧情
           if (res === "DONE") {
             log.info("收到任务完成指令，任务完成");
             return true;
@@ -1847,7 +2226,8 @@ processKeyPress: async (step) => {
     },
 
     // 执行对话委托流程（优化版）
-    executeTalkCommission: async (process_path) => {
+    // startLine：从 process.json 的第几行开始执行
+    executeTalkCommission: async (process_path, startLine) => {
       try {
 
         const processSteps = await Execute.loadAndParseProcessFile(process_path);
@@ -1856,6 +2236,10 @@ processKeyPress: async (step) => {
 
         // 使用统一的处理器执行流程
         if (processSteps && processSteps.__simpleScript) {
+          // 显式指定了起始行 → 优先于断点文件
+          if (Number(startLine) > 1) {
+            return await Execute.executeSimpleScriptFlow(processSteps.script, process_path, startLine);
+          }
           if (settings.useBreakPoint) {
             try {
               log.info("尝试读取断点文件");
@@ -1868,7 +2252,7 @@ processKeyPress: async (step) => {
               log.info("未找到断点文件，执行完整任务流程");
             }
           }
-          return await Execute.executeSimpleScriptFlow(processSteps.script, process_path);
+          return await Execute.executeSimpleScriptFlow(processSteps.script, process_path, startLine);
         }
         return await Execute.executeUnifiedTalkProcess(
           processSteps,
@@ -2519,34 +2903,409 @@ processKeyPress: async (step) => {
         await sleep(10000);
         return;
       }
-      const picked = await chooseProcess();
-      if (!picked) {
-        log.info("未选择剧情，脚本结束");
+      // 「刷新剧情列表」：扫描 process 目录并更新 settings 后结束（勾选强制选择剧情时继续往下走）
+      const isRefresh = (selectedProcess === "刷新剧情列表");
+      if (isRefresh && !forceHtmlPicker) {
+        // 刷新操作：扫描所有process.json并更新设置
+        await refreshProcessList();
+        log.info("委托列表已刷新，请重新选择并运行");
         return;
       }
 
-      log.info("执行任务: {path}", picked.name);
-      relativePath = picked.path.replace(/^process[\\/]/, "");
-      log.info("启用自动剧情");
-      dispatcher.AddTrigger(new RealtimeTimer("AutoSkip"));
-      if (!settings.noSkip) {
-        log.info("启用自动拾取");
-        dispatcher.AddTrigger(new RealtimeTimer("AutoPick"));
+      // 每次运行都会扫描一遍
+      await refreshProcessList();
+      if (isRefresh) {
+        log.info("委托列表已刷新，请在下方选择页中选择要运行的剧情");
       }
-      if (!settings.noEat) {
-        log.info("启用自动吃药");
-        dispatcher.AddTrigger(new RealtimeTimer("AutoEat"));
+
+      // 读取剧情列表（供运行面板的设置窗口使用）
+      const settingsContent0 = file.readTextSync("./settings.json");
+      const settingsArray0 = JSON.parse(settingsContent0);
+      const sel0 = settingsArray0.find(item => item.name === "process_selector");
+      const processPaths = (sel0 && sel0.process_paths) || {};
+      const processList = Object.keys(processPaths).map(n => ({ name: n, path: processPaths[n] }));
+
+      // 初始化并显示运行面板
+      initOverlay(getVersion());
+      initKeyHook();
+
+      // 注册「指令列表」提供者：面板请求某个剧情的行列表时调用
+      // 返回 [{ line, text, kind, cmd, selectable }]；注释/元数据/块头不可选
+      setLineListProvider((name) => {
+        try {
+          const p = processPaths[name];
+          if (!p) return [];
+          const content = file.readTextSync(p);
+          const parsed = Execute.parseExtendedSimpleScript(content);
+
+          // 建立「行号 → 指令」映射（解析器给的是真实文件行号）
+          const instrAt = new Map();
+          for (const block of (parsed.blocks || [])) {
+            for (const ins of block.instructions) {
+              if (ins.line) instrAt.set(ins.line, ins);
+            }
+          }
+
+          const rawLines = content.split('\n');
+          const out = [];
+          for (let i = 0; i < rawLines.length; i++) {
+            const lineNo = i + 1;
+            const raw = rawLines[i];
+            const trimmed = raw.trim();
+
+            // 空行：跳过，避免列表被大量空白撑开
+            if (trimmed === '') continue;
+
+            // 注释行（# 或 //）→ 显示，但不可选
+            if (trimmed.startsWith('#') || trimmed.startsWith('//')) {
+              out.push({ line: lineNo, text: trimmed, kind: 'comment', selectable: false });
+              continue;
+            }
+
+            // 元数据（作者 / 描述）→ 显示，但不可选
+            const ci = Math.max(trimmed.indexOf('：'), trimmed.indexOf(':'));
+            const key = ci === -1 ? '' : trimmed.slice(0, ci).trim();
+            if (/^作者$/i.test(key) || /^描述$/i.test(key)) {
+              out.push({ line: lineNo, text: trimmed, kind: 'meta', selectable: false });
+              continue;
+            }
+
+            // 可执行指令（以解析结果为准）→ 可选
+            const ins = instrAt.get(lineNo);
+            if (ins) {
+              out.push({
+                line: lineNo,
+                text: raw.replace(/\s+$/, ''),   // 保留行内注释，便于阅读
+                kind: 'instr',
+                cmd: ins.type,
+                selectable: true
+              });
+              continue;
+            }
+
+            // 块头（以 ：/: 结尾，且非网址）→ 显示，但不可选
+            if (/[:：]$/.test(trimmed) && !/^https?:\/\//i.test(trimmed)) {
+              out.push({ line: lineNo, text: trimmed, kind: 'header', selectable: false });
+              continue;
+            }
+
+            // 兜底（未识别的指令）→ 显示，但不可选
+            out.push({ line: lineNo, text: trimmed, kind: 'unknown', selectable: false });
+          }
+          return out;
+        } catch (e) {
+          log.warn('读取指令列表失败: ' + (e && e.message));
+          return [];
+        }
+      });
+
+      // 持续运行模式：常驻挂载但不自动运行任何剧情，等用户在选择页里选
+      const persistent = (selectedProcess === "持续运行");
+      if (persistent) {
+        log.info("持续运行模式：脚本已挂载，等待在运行面板中选择剧情");
       }
-      await switchPartyIfNeeded(team);
-      await Execute.executeTalkCommission(picked.path);
-      dispatcher.ClearAllTriggers();
-      if(settings.xiaoxitongzhi) notification.error("脚本执行完成");
+
+      let currentName = persistent ? '' : selectedProcess;
+      // 暂停通知要显示「当前运行：xxx」，剧情名确定/切换时同步记录
+      setNotifyProcess(currentName);
+      // 先 showOverlay 建立 winId
+      await showOverlay({
+        current: currentName,
+        processes: processList,
+        status: persistent ? 'waiting' : 'running'   // 持续运行首帧即显示空闲态
+      });
+      setPersistentMode(persistent);
+
+      // 运行循环：支持「切换剧情」「放弃剧情」立即生效
+      // 声明须在「强制弹窗」之前
+      let running = true;
+      let idle = persistent;          // 是否处于「挂载但空闲」状态
+
+      // 「强制在HTML中选择剧情」：勾选后主动弹出选择页（「持续运行」除外），以页面选择为准
+      if (forceHtmlPicker && !persistent) {
+        const hasPicked = selectedProcess && selectedProcess !== "刷新剧情列表";
+        log.info(hasPicked
+          ? `强制在HTML中选择剧情：BetterGI 选择为「${selectedProcess}」，正在打开选择页`
+          : "强制在HTML中选择剧情：正在打开选择页（未预选剧情）");
+        await waitWhileInteracting();      // 确保处于可交互状态（面板可点）
+        initKeyHook();                     // 已初始化过则内部直接返回
+        openPicker(hasPicked ? selectedProcess : '');
+        // 等待用户选择或取消；取消则直接结束脚本
+        const pickStart = Date.now();
+        while (running && !hasSwitchRequest() && !hasAbandonRequest()
+          && !hasPickerCancelled() && (Date.now() - pickStart) < 30000) {
+          await waitWhileInteracting();
+          pumpAndBeat();
+          await sleep(200);
+        }
+        if (hasSwitchRequest()) {
+          const picked = consumeSwitchRequest();
+          if (picked) {
+            log.info(`HTML 选择页：用户选择了「${picked}」，以页面选择为准`);
+            selectedProcess = picked;
+            currentName = picked;
+            setNotifyProcess(currentName);
+          }
+        } else {
+          consumePickerCancelled();
+          log.info("未选择剧情，脚本结束");
+          notifyDone();
+          return;
+        }
+      }
+
+      while (running) {
+        // 空闲态（仅持续运行模式）：不跑任何剧情，只保持收信
+        if (idle) {
+          notifyWaiting();
+          sendProcessList(processList, '');
+          // 阻塞等待「选择剧情」请求；期间保持收信
+
+          // 空闲态同样支持 K 键交互
+
+
+
+
+          while (running && !hasSwitchRequest() && !hasAbandonRequest()) {
+            await waitWhileInteracting();   // 空闲态同样支持 K 键交互
+            pumpAndBeat();
+            await sleep(200);
+          }
+          if (!running) break;
+
+          // 空闲时点「放弃」→ 无剧情可放弃，忽略
+          if (consumeAbandonRequest()) {
+            log.info("持续运行：当前没有正在运行的剧情，忽略「放弃」");
+            continue;
+          }
+
+          const pick = consumeSwitchRequest();
+          if (!pick) continue;
+          if (!processPaths[pick]) {
+            log.warn(`持续运行：面板选择的 "${pick}" 不在剧情列表中，已忽略`);
+            consumeStartLine();              // 丢弃无效的起始行
+            continue;
+          }
+          currentName = pick;
+          selectedProcess = pick;
+          setNotifyProcess(currentName);       // 暂停通知跟随当前剧情
+          idle = false;
+          resetElapsed();                      // 新剧情 → 时间归零
+          sendProcessList(processList, currentName);
+          log.info(`持续运行：开始执行所选剧情「${currentName}」`);
+        }
+
+        // 执行态
+        const process_path = processPaths[currentName];
+        if (!process_path) {
+          log.error(`未找到名称为 "${currentName}" 的流程路径配置`);
+          consumeStartLine();
+          if (persistent) { idle = true; currentName = ''; continue; }
+          break;
+        }
+
+        // 取出「从第几行开始」请求（0 = 从头），一次性消费
+        const startLine = consumeStartLine();
+
+        log.info("执行任务: {path}", currentName);
+        relativePath = process_path.replace(/^process[\\/]/, '');
+
+        log.info("启用自动剧情");
+        dispatcher.AddTrigger(new RealtimeTimer("AutoSkip"));
+        if (!settings.noSkip) {
+          log.info("启用自动拾取");
+          dispatcher.AddTrigger(new RealtimeTimer("AutoPick"));
+        }
+        if (!settings.noEat) {
+          log.info("启用自动吃药");
+          dispatcher.AddTrigger(new RealtimeTimer("AutoEat"));
+        }
+
+        await switchPartyIfNeeded(team);
+        sendProcessList(processList, currentName);
+        sendProgress({ status: 'running', process: currentName });
+
+        // 执行当前剧情；期间由 overlay 模块汇报切换/放弃请求
+        await Execute.executeTalkCommission(process_path, startLine);
+        dispatcher.ClearAllTriggers();
+
+        // 优先处理「放弃剧情」
+        if (consumeAbandonRequest()) {
+          if (persistent) {
+            // 持续运行 → 回到「挂载但空闲」的初始状态
+            log.info(`持续运行：已放弃剧情「${currentName}」，回到等待选择状态`);
+            idle = true;
+            currentName = '';
+            setNotifyProcess('');
+            resetElapsed();
+            sendProcessList(processList, '');
+            sendProgress({ status: 'idle', process: '', line: '', lineNo: 0 });
+            continue;
+          } else {
+            // 其他模式 → 结束（停止）整个脚本
+            log.info(`已放弃剧情「${currentName}」，脚本结束`);
+            running = false;
+            break;
+          }
+        }
+
+        // 检查是否有来自面板的切换请求
+        const next = consumeSwitchRequest();
+        if (next) {
+          log.info(`切换剧情：${currentName} → ${next}`);
+          currentName = next;
+          selectedProcess = next;
+          setNotifyProcess(currentName);       // 暂停通知跟随当前剧情
+          // 切换剧情后「已运行」时间归零重新计算
+          resetElapsed();
+          // 让面板立刻反映新剧情
+          sendProcessList(processList, currentName);
+          sendProgress({ status: 'running', process: currentName, line: '', lineNo: 0 });
+          continue;                        // 立即开始新剧情
+        }
+
+        // 剧情自然跑完
+        if (persistent) {
+          // 持续运行 → 回到空闲态，等用户再选
+          log.info(`持续运行：剧情「${currentName}」已完成，回到等待选择状态`);
+          idle = true;
+          currentName = '';
+          setNotifyProcess('');
+          resetElapsed();
+          sendProcessList(processList, '');
+          sendProgress({ status: 'idle', process: '', line: '', lineNo: 0 });
+          continue;
+        }
+        running = false;
+      }
+
+      notifyDone();
+      if (settings.xiaoxitongzhi) notification.error("脚本执行完成");
     } catch (error) {
       log.error("执行出错: {error}", error.message);
       errorlog();
-      if(settings.xiaoxitongzhi) notification.error("脚本执行出错: " + error.message);
+      if (settings.xiaoxitongzhi) notification.error("脚本执行出错: " + error.message);
+    } finally {
+      // 脚本结束 / 出错时都要释放面板与按键钩子
+      disposeOverlay();
     }
   };
+
+// 刷新委托列表（保留完整路径结构）
+async function refreshProcessList() {
+  // 读取所有process.json文件
+  const allFiles = await readFolder("process/", true);
+  
+  // 筛选并处理符合条件的process.json文件
+  const processEntries = allFiles
+      .filter(file => file.fileName === "process.json" && file.fullPath !== "process/process.json")
+      .map(file => {
+          const pathSegments = file.folderPathArray;
+          
+          // 确保路径中有"process"部分
+          const processIndex = pathSegments.indexOf("process");
+          if (processIndex === -1) {
+              throw new Error(`无效的路径结构: ${file.fullPath}`);
+          }
+          
+          // 提取"process"之后的所有部分作为选项名称
+          const optionName = pathSegments.slice(processIndex + 1).join('-');
+          
+          return {
+              name: optionName,
+              path: file.fullPath
+          };
+      });
+
+  // 创建选项列表（以「刷新剧情列表」和「持续运行」开头）
+  // 这两个是功能项而非剧情，必须固定保留
+  const options = ["刷新剧情列表", "持续运行", ...processEntries.map(entry => entry.name)];
+  
+  // 更新settings.json
+  await updateSettingsFile(options, processEntries);
+  log.info("已更新{count}个委托选项", processEntries.length);
+}
+
+// 更新settings.json文件
+async function updateSettingsFile(options, processEntries) {
+    const settingsPath = "./settings.json";
+    let settingsArray;
+    
+    try {
+        // 读取现有设置
+        const content = file.readTextSync(settingsPath);
+        settingsArray = JSON.parse(content);
+    } catch (e) {
+        // 文件不存在或解析失败时创建默认设置
+        throw new Error("设置文件不存在");
+    }
+    
+    // 更新process_selector选项
+    const selectorIndex = settingsArray.findIndex(item => item.name === "process_selector");
+    if (selectorIndex !== -1) {
+        settingsArray[selectorIndex].options = options;
+        settingsArray[selectorIndex].default = "刷新剧情列表";
+        
+        // 更新每个选项对应的process.json路径
+        settingsArray[selectorIndex].process_paths = {};
+        for (const entry of processEntries) {
+            settingsArray[selectorIndex].process_paths[entry.name] = entry.path;
+        }
+
+    } else {
+        // 如果不存在则添加
+        const processPaths = {};
+        for (const entry of processEntries) {
+            processPaths[entry.name] = entry.path;
+        }
+        settingsArray.push({
+            "name": "process_selector",
+            "type": "select",
+            "label": "可执行剧情列表",
+            "options": options,
+            "default": "刷新剧情列表",
+            "process_paths": processPaths
+        });
+    }
+    
+    // 写入更新后的设置
+    const success = file.writeTextSync(settingsPath, JSON.stringify(settingsArray, null, 2));
+    if (!success) {
+        throw new Error("写入设置文件失败");
+    }
+}
+
+// 文件夹读取函数（优化版）
+async function readFolder(folderPath, onlyJson) {
+    log.info(`开始读取文件夹: ${folderPath}`);
+    const folderStack = [folderPath];
+    const files = [];
+
+    while (folderStack.length > 0) {
+        const currentPath = folderStack.pop();
+        const items = file.ReadPathSync(currentPath);
+        const subFolders = [];
+
+        for (const itemPath of items) {
+            if (file.IsFolder(itemPath)) {
+                subFolders.push(itemPath);
+            } else if (!onlyJson || itemPath.toLowerCase().endsWith(".json")) {
+                const pathParts = itemPath.split(/[\\\/]/).filter(Boolean);
+                const fileName = pathParts.pop();
+                files.push({
+                    fullPath: itemPath,
+                    fileName: fileName,
+                    folderPathArray: pathParts
+                });
+            }
+        }
+
+        // 保持原始顺序添加子文件夹
+        folderStack.push(...subFolders.reverse());
+    }
+
+    return files;
+}
 
 //切换队伍
 async function switchPartyIfNeeded(partyName) {
